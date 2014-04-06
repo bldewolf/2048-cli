@@ -1,6 +1,5 @@
 #include <curses.h> 
 #include <stdlib.h> /* for malloc  */
-#include <time.h>   /* for time    */
 #include <unistd.h> /* for getopts */
 
 // Repeat an expression y, x times */
@@ -48,15 +47,13 @@ int **g;
 /* grid size */
 int SZ;
 
-/* score, and last turn score */
+/* score, and last turn score/move */
 int s;
 int sl;
+int ml;
 
 /* highscore */
 int hs;
-
-/* highscore file */
-char *file;
 
 /* Merges adjacent squares of the same value together in a certain direction */
 void merge(int d)
@@ -105,6 +102,7 @@ void gravitate(int d)
                 if (j + st < SZ) {
                     g[i][j] = g[i][j + st];
                     g[i][j + st] = 0;
+                    ml++;
                 }
             }
         }
@@ -119,6 +117,7 @@ void gravitate(int d)
                 if (j + st < SZ) {
                     g[j][i] = g[j + st][i];
                     g[j + st][i] = 0;
+                    ml++;
                 }
             }
         }
@@ -133,6 +132,7 @@ void gravitate(int d)
                 if (j - st >= 0) {
                     g[i][j] = g[i][j - st];
                     g[i][j - st] = 0;
+                    ml++;
                 }
             }
         }
@@ -147,58 +147,43 @@ void gravitate(int d)
                 if (j - st >= 0) {
                     g[j][i] = g[j - st][i];
                     g[j - st][i] = 0;
+                    ml++;
                 }
             }
         }
     }
 }
 
-/* load hiscore */
-void load_score() {
-    FILE *fd = fopen(file, "r");
-    if (fd == NULL) fd = fopen(file, "w+");
-    if (fscanf(fd, "%d", &hs) == EOF) hs = 0;
-    fclose(fd);
-}
-
-/* saves hiscore, but only if playing on standard size grid */
-void save_score() {
-    if (s > hs && SZ == 4) {
-        hs = s;
-        FILE *fd = fopen(file, "w+");
-        fprintf(fd, "%d", hs);
-        fclose(fd);
-    }
-}
-
 /* returns if there are any available spaces left on the grid */
 int space_left()
 {
-    int i, j;
+    int i, j, sum = 0;
     for (i = 0; i < SZ; i++)
         for (j = 0; j < SZ; j++)
             if (!g[i][j])
-                return 1;
-    return 0;
+                sum++;
+    return sum;
 }
 
 /* places a random block onto the grid - either a 4, or a 2 with a chance of 1:3 respectively */
 /* could do this in a much smarter fashion by finding which spaces are free */
 void rand_block()
 {
-    if (space_left()) {
-        int x_p, y_p;
-        while (g[x_p = rand() % SZ][y_p = rand() % SZ]);
-        g[x_p][y_p] = (rand() & 3) ?  2 : 4;
-    }
-    else {
-        endwin();
-        printf("\n"
-               "YOU LOSE! - Your score was %d\n", s);
-        save_score();
-        exit(EXIT_SUCCESS);
+    int spots = space_left();
+    int i, j, pick = (rand() >> 8) % spots;
+    if (spots) {
+        for (i = 0; i < SZ; i++)
+            for (j = 0; j < SZ; j++)
+                if (!g[i][j]) {
+                    if(!pick) {
+                        g[i][j] = ((rand() >> 8) & 3) ?  2 : 4;
+                        return;
+                    }
+                    pick--;
+                }
     }
 }
+
 
 /* quick floor log2(n) */
 int flog2(int n)
@@ -236,8 +221,10 @@ void draw_grid(WINDOW *gamewin)
             xps += (MAXVAL + 2);
         }
     }
+    wmove(gamewin, SZ + 3, 0);
     ITER(SZ*(MAXVAL + 2) + 1, waddch(gamewin, '-')); 
-    wrefresh(gamewin);
+    mvwprintw(gamewin, SZ + 4, 0, "Press q to restart");
+    refresh();
 }
 
 /* entry point for the program */
@@ -245,98 +232,43 @@ void draw_grid(WINDOW *gamewin)
 int main(int argc, char **argv)
 {
     /* init ncurses environment */
-    initscr();
+    WINDOW *gamewin = initscr();
     cbreak();
     noecho();
     curs_set(FALSE);
-
-    /* init variables */
-    file = ".hs2048g";
-    hs = 0;
-    s  = 0;
-    sl = 0;
-    SZ = 4;
-    MAXVAL = 4;
-    CALLOC2D(g, SZ);
-
-    load_score();
-    int n_blocks = 1;
-    
-    /* parse options */
-    int c;
-    while ((c = getopt(argc, argv, "rchs:b:")) != -1) {
-        switch (c) {
-            // color support - assumes your terminal can display colours
-            // should still work regardless
-            case 'c':
-                start_color();
-                init_pair(1, 1, 0);
-                init_pair(2, 2, 0);
-                init_pair(3, 3, 0);
-                init_pair(4, 4, 0);
-                init_pair(5, 5, 0);
-                init_pair(6, 6, 0);
-                init_pair(7, 7, 0);
-                break;
-            // different board sizes
-            case 's':
-                FREE2D(g, SZ);
-                int optint = atoi(optarg);
-                SZ = optint > 4 ? optint : 4;
-                CALLOC2D(g, SZ);
-                break;
-            // different block spawn rate
-            case 'b':
-                n_blocks = atoi(optarg);
-                break;
-            // reset hiscores
-            case 'r':
-                endwin();
-                printf("Are you sure you want to reset your highscores? (Y)es or (N)o\n");
-                int response;
-                if ((response = getchar()) == 'y' || response == 'Y') {
-                    FILE *fd = fopen(file, "w+");
-                    fclose(fd);
-                }
-                exit(EXIT_SUCCESS);
-            // help menu
-            case 'h':
-                endwin();
-                printf("Controls:\n"
-                       "    hjkl, wasd      Movement\n"
-                       "    q               Quit\n"
-                       "\n"
-                       "Usage:\n"
-                       "    2048 [options]\n"
-                       "\n"
-                       "Options:\n"
-                       "    -s <size>       Set the grid border length\n"
-                       "    -b <rate>       Set the block spawn rate\n"
-                       "    -c              Enables color support\n");
-                exit(EXIT_SUCCESS);
-        }
-    }
-    
-    int width  = SZ * (MAXVAL + 2) + 1;
-    int height = SZ * (MAXVAL + 2) + 3;
-
-    // might center in middle of screen
-    WINDOW *gamewin = newwin(height, width, 1, 1);
     keypad(gamewin, TRUE);
 
+    /* init variables */
+    hs = 0;
+    SZ = 4;
+    MAXVAL = 4;
+    int n_blocks = 1;
+    
+    start_color();
+    init_pair(1, 1, 0);
+    init_pair(2, 2, 0);
+    init_pair(3, 3, 0);
+    init_pair(4, 4, 0);
+    init_pair(5, 5, 0);
+    init_pair(6, 6, 0);
+    init_pair(7, 7, 0);
+    
     /* random seed */
-    srand((unsigned int)time(NULL));
+    srand(123);
+
+startover:
+    s = 0;
+    sl = 0;
+    CALLOC2D(g, SZ);
     ITER(2, rand_block());
     draw_grid(gamewin);
-
     int key;
     while (1) {
         /* will goto this if we didn't get a valid keypress */
-        retry:;
         key = wgetch(gamewin);
         sl = 0;
+        ml = 0;
 
-        /* should check if anything changed during merge and if not retry */
         switch (key) {
             case 'h':
             case 'a':
@@ -360,16 +292,19 @@ int main(int argc, char **argv)
                 break;
             case 'q':
                 FREE2D(g, SZ);
-                erase();
-                refresh();
-                endwin();
-                save_score();
-                exit(EXIT_SUCCESS);
+                goto startover;
             default:
-                goto retry;
+                continue;
         }
 
-        ITER(n_blocks, rand_block());
+        /* No new blocks if nothing scored/shifted */
+        if(ml || sl)
+            ITER(n_blocks, rand_block());
+
+        /* Store new high score in running game */
+        if(hs < s)
+            hs = s;
+
         draw_grid(gamewin);
     }
 }
